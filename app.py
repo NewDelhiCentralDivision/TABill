@@ -57,7 +57,7 @@ from google.genai import types
 # -----------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------
-GEMINI_MODEL = "gemini-2.5-flash"   # update here if Google renames/retires this model
+GEMINI_MODEL = "gemini-3.6-flash"   # update here if Google renames/retires this model
 RATE_PER_KM = 11
 HEADERS = ["From Date", "From Time", "From Place", "To Date", "To Time",
            "To Place", "Mode", "Distance (Km)", "Fare Paid", "Remarks"]
