@@ -25,7 +25,7 @@ RUN LOCALLY
     streamlit run app.py
 
 Get a free Gemini API key at https://aistudio.google.com/apikey and paste
-it in the sidebar.
+it in the sidebar (or set it as a secret / env var, see below).
 
 --------------------------------------------------------------------
 DEPLOY ON STREAMLIT COMMUNITY CLOUD
@@ -35,13 +35,19 @@ instead of typing the key each time, add it once under
 App settings → Secrets:
 
     GEMINI_API_KEY = "your-key-here"
+    GEMINI_MODEL   = "gemini-3.6-flash"   # optional: default model in the dropdown
 
-The app will pick it up automatically and hide the sidebar key box.
+The app picks the key up automatically and never asks for it. (Locally, the
+same names also work as environment variables or in .streamlit/secrets.toml.)
+
+The sidebar "Gemini model" dropdown lists the models your key can use
+(fetched live); change it any time without redeploying.
 --------------------------------------------------------------------
 """
 
 import io
 import json
+import os
 from datetime import date, datetime
 
 import pandas as pd
@@ -57,7 +63,10 @@ from google.genai import types
 # -----------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------
-GEMINI_MODEL = "gemini-3.6-flash"   # update here if Google renames/retires this model
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"   # default selection; can be overridden via secrets
+# Fallback choices, used when the live model list can't be fetched.
+FALLBACK_MODELS = [DEFAULT_GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+CUSTOM_MODEL_LABEL = "Other (type a model name)…"
 RATE_PER_KM = 11
 HEADERS = ["From Date", "From Time", "From Place", "To Date", "To Time",
            "To Place", "Mode", "Distance (Km)", "Fare Paid", "Remarks"]
@@ -128,17 +137,69 @@ if "last_calc" not in st.session_state:
 # -----------------------------------------------------------------------
 # Gemini client / API key
 # -----------------------------------------------------------------------
+def get_secret(name: str) -> str:
+    """Read a value from Streamlit secrets, falling back to an environment variable.
+
+    st.secrets raises if no secrets file exists (e.g. running locally), so guard it.
+    """
+    try:
+        val = st.secrets.get(name)
+    except Exception:
+        val = None
+    val = val or os.environ.get(name)
+    return str(val).strip() if val else ""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def list_gemini_models(key: str) -> list:
+    """Models that support generateContent, fetched live with the given key."""
+    c = genai.Client(api_key=key)
+    names = []
+    for m in c.models.list():
+        actions = getattr(m, "supported_actions", None) or []
+        if "generateContent" in actions:
+            names.append(m.name.removeprefix("models/"))
+    return sorted(set(names))
+
+
+secret_key = get_secret("GEMINI_API_KEY")
+
 with st.sidebar:
     st.markdown("### Gemini API key")
-    secret_key = st.secrets.get("GEMINI_API_KEY") if hasattr(st, "secrets") else None
     if secret_key:
         api_key = secret_key
-        st.success("Loaded from app secrets ✓")
+        st.success("API key loaded from app secrets ✓")
     else:
         api_key = st.text_input("Paste your key", type="password", key="api_key_input",
                                  help="Get one free at https://aistudio.google.com/apikey")
-        st.caption("For a shared/deployed app, add `GEMINI_API_KEY` under "
-                   "**App settings → Secrets** instead — then this box won't be needed.")
+        st.caption("To avoid typing this, add `GEMINI_API_KEY` under "
+                   "**App settings → Secrets** — the app will then use it automatically.")
+
+    # --- Model picker -----------------------------------------------------
+    st.markdown("### Gemini model")
+    default_model = get_secret("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
+    model_options = list(FALLBACK_MODELS)
+    if api_key:
+        try:
+            live = list_gemini_models(api_key)
+            # keep only text/multimodal Gemini models; drop embeddings, imagen, etc.
+            live = [m for m in live if m.startswith("gemini") and "embedding" not in m]
+            if live:
+                model_options = live
+        except Exception:
+            pass  # fall back to the static list
+    if default_model not in model_options:
+        model_options.insert(0, default_model)
+    model_options = model_options + [CUSTOM_MODEL_LABEL]
+
+    choice = st.selectbox("Model", model_options, index=model_options.index(default_model),
+                          key="model_choice",
+                          help="Used for voice, photo and distance estimation.")
+    if choice == CUSTOM_MODEL_LABEL:
+        GEMINI_MODEL = st.text_input("Model name", value=default_model, key="model_custom").strip() \
+            or default_model
+    else:
+        GEMINI_MODEL = choice
     st.markdown("---")
     st.caption("Distances are AI-estimated road distances within Delhi. "
                "Review each entry before exporting for reimbursement.")
