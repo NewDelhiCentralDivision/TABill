@@ -90,16 +90,40 @@ async def transcribe_live(audio, mime, key):
         input_audio_transcription=types.AudioTranscriptionConfig(language_codes=[]),
     )
     try:
-        async with asyncio.timeout(120):
+        async with asyncio.timeout(len(pcm) / 32000 + 45):
             async with client.aio.live.connect(model=os.getenv('TRANSCRIPTION_MODEL','gemini-3.5-transcribe-live'), config=config) as live:
-                for part in (pcm[i:i + 32000] for i in range(0, len(pcm), 32000)):
-                    await live.send_realtime_input(audio=types.Blob(data=part, mime_type='audio/pcm;rate=16000'))
-                await live.send_realtime_input(audio_stream_end=True)
                 chunks=[]
-                async for response in live.receive():
-                    server=response.server_content
-                    if server and server.input_transcription and server.input_transcription.text:
-                        chunks.append(server.input_transcription.text)
+                last_event=time.monotonic()
+                async def receive_transcripts():
+                    nonlocal last_event
+                    while True:
+                        async for response in live.receive():
+                            server=response.server_content
+                            if server and server.input_transcription and server.input_transcription.text:
+                                chunks.append(server.input_transcription.text)
+                                last_event=time.monotonic()
+                        await asyncio.sleep(0)
+                reader=asyncio.create_task(receive_transcripts())
+                try:
+                    # Live audio must be paced while responses are read concurrently.
+                    for offset in range(0,len(pcm),3200):
+                        if reader.done():
+                            reader.result()
+                            break
+                        await live.send_realtime_input(audio=types.Blob(data=pcm[offset:offset+3200], mime_type='audio/pcm;rate=16000'))
+                        await asyncio.sleep(0.1)
+                    await live.send_realtime_input(audio_stream_end=True)
+                    ended=time.monotonic()
+                    while not reader.done() and time.monotonic()-ended<20:
+                        if chunks and time.monotonic()-max(ended,last_event)>5:
+                            break
+                        await asyncio.sleep(0.1)
+                    if reader.done():
+                        reader.result()
+                finally:
+                    reader.cancel()
+                    await asyncio.gather(reader,return_exceptions=True)
+                logging.info('Gemini Live completed: audio_bytes=%d transcript_segments=%d',len(pcm),len(chunks))
                 text=' '.join(chunks).strip()
         if not text:
             raise HTTPException(422, 'No speech was recognized. Please speak clearly and retry this recording.')
