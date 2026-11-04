@@ -110,3 +110,19 @@ async def test_followup_preserves_chosen_office_ids(monkeypatch):
     sdk=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content),aclose=aclose))
     monkeypatch.setattr(main.genai,'Client',lambda **kw:sdk);r=await main.extract(b'x','audio/mp4',prior)
     assert r.legs[0].from_id==prior[0]['from_id'];assert r.legs[0].to_id==prior[0]['to_id']
+
+@pytest.mark.asyncio
+async def test_extraction_recovers_from_provider_overload(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY','test')
+    monkeypatch.setattr(main,'transcribe_live',lambda *args: asyncio.sleep(0,result='official journey'))
+    calls=[]
+    async def generate_content(**kw):
+        calls.append(kw['model'])
+        if len(calls)==1:raise main.genai.errors.ServerError(503,{'error':{'message':'busy','code':503}})
+        return SimpleNamespace(text=Extraction(transcript='official journey',legs=[leg()]).model_dump_json())
+    async def aclose():pass
+    sdk=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content),aclose=aclose))
+    monkeypatch.setattr(main.genai,'Client',lambda **kw:sdk)
+    result=await main.extract(b'audio','audio/webm',[])
+    assert len(result.legs)==1
+    assert calls==['gemini-3.5-flash-lite','gemini-2.5-flash']
