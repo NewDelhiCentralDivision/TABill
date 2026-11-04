@@ -125,4 +125,4 @@ async def test_extraction_recovers_from_provider_overload(monkeypatch):
     monkeypatch.setattr(main.genai,'Client',lambda **kw:sdk)
     result=await main.extract(b'audio','audio/webm',[])
     assert len(result.legs)==1
-    assert calls==['gemini-3.8-flash','gemini-3.5-flash-lite']
+    assert calls==['gemini-3.5-flash-lite','gemini-3.8-flash']

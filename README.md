@@ -65,7 +65,7 @@ Use the connected GitHub repository `NewDelhiCentralDivision/TABill`, developmen
 
 The smallest Render plan (`free`, 512 MB) is suitable for preview and sleeps when idle. For an always-on departmental service, choose the 512 MB paid plan (listed at US$7/month on 4 November 2026) after measuring actual load. See [current plans](https://render.com/docs/compute-plans) and [prices](https://render.com/pricing). A single service avoids a second backend bill and cross-origin cookie complications. Cloudflare can front a custom domain later; the frontend remains static and can be moved to Cloudflare with a same-origin API proxy. Do not expose secrets through static build variables.
 
-Add `GEMINI_API_KEY`, the exact `APP_ORIGIN`, `GEMINI_MODEL=gemini-3.5-transcribe-live`, `EXTRACTION_MODEL=gemini-3.8-flash`, `COOKIE_SECURE=true`, and the approved routing variables through Render's Environment screen. API secrets are intentionally not present in GitHub. Saving environment changes must result in a new deployment before they take effect. The preview can serve the interface without a key, but voice processing and road-distance export stay blocked until configured.
+Add `GEMINI_API_KEY`, the exact `APP_ORIGIN`, `GEMINI_MODEL=gemini-3.5-transcribe-live`, `EXTRACTION_MODEL=gemini-3.5-flash-lite`, `COOKIE_SECURE=true`, and the approved routing variables through Render's Environment screen. API secrets are intentionally not present in GitHub. Saving environment changes must result in a new deployment before they take effect. The preview can serve the interface without a key, but voice processing and road-distance export stay blocked until configured.
 
 ## Workflow, limits and recovery
 
