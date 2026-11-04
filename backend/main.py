@@ -164,7 +164,9 @@ async def extract(audio, mime, prior):
         parsed.transcript=transcript
         return parsed
     except HTTPException: raise
-    except Exception:
+    except Exception as exc:
+        diagnostic=str(exc).replace(key,'[redacted]') if isinstance(exc,genai.errors.APIError) else type(exc).__name__
+        logging.error('Gemini extraction failure type=%s detail=%s',type(exc).__name__,diagnostic[:1500])
         raise HTTPException(503,'The transcript could not be organized into journeys. Your recording is preserved; please retry or speak the date and offices clearly.')
     finally:
         if 'client' in locals(): await client.aio.aclose()
