@@ -1,4 +1,5 @@
-import io, json, math, os, re, sqlite3
+import asyncio, io, json, math, os, re, sqlite3
+import time as system_time
 from copy import copy
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -58,16 +59,37 @@ def resolve(name,chosen):
 class Distance:
     def __init__(self):
         self.path=os.getenv('DISTANCE_CACHE','/tmp/ta-distance.sqlite3')
-        with sqlite3.connect(self.path) as c: c.execute('CREATE TABLE IF NOT EXISTS distances (key TEXT PRIMARY KEY, km TEXT)')
+        self._routing_lock=asyncio.Lock()
+        self._last_request=0.0
+        self._data_version=None
+        self._version_checked=0.0
+        with sqlite3.connect(self.path) as c: c.execute('CREATE TABLE IF NOT EXISTS distances_v2 (key TEXT PRIMARY KEY, km TEXT, fetched_at REAL)')
     async def km(self,a,b):
+        # One worker owns this lock: serialize cache misses and public-provider traffic.
+        async with self._routing_lock:
+            return await self._km(a,b)
+    async def _km(self,a,b):
         if not a['coordinates_valid'] or not b['coordinates_valid']: raise ValueError('Office coordinates need correction by the administrator.')
         method=os.getenv('DISTANCE_METHOD','road')
         if method=='haversine' and os.getenv('ALLOW_HAVERSINE')!='true': raise ValueError('Straight-line distance has not been approved by the administrator.')
         if a['office_id']==b['office_id']: raise ValueError('Departure and destination are the same office. Review this journey.')
         version=os.getenv('ROUTING_DATA_VERSION','unconfigured')
+        version_url=os.getenv('ROUTING_VERSION_URL','')
+        if method=='road' and version_url:
+            if not self._data_version or system_time.monotonic()-self._version_checked>3600:
+                try:
+                    async with httpx.AsyncClient(timeout=10,headers={'User-Agent':'IndiaPost-Smart-TA/1.0 (+https://india-post-smart-ta-preview.onrender.com)'}) as client:
+                        response=await client.get(version_url);response.raise_for_status()
+                    value=response.text.strip()
+                    datetime.fromisoformat(value.replace('Z','+00:00'))
+                    self._data_version=value;self._version_checked=system_time.monotonic()
+                except (httpx.HTTPError,ValueError):
+                    if not self._data_version or system_time.monotonic()-self._version_checked>86400:
+                        raise ValueError('Road map version is temporarily unavailable. Please retry.')
+            version=self._data_version
         key=json.dumps([a['office_id'],b['office_id'],method,version,a['latitude'],a['longitude'],b['latitude'],b['longitude'],os.getenv('ROUTING_URL','')])
         with sqlite3.connect(self.path) as c:
-            row=c.execute('SELECT km FROM distances WHERE key=?',(key,)).fetchone()
+            row=c.execute('SELECT km FROM distances_v2 WHERE key=? AND fetched_at>?',(key,system_time.time()-86400)).fetchone()
         if row: return Decimal(row[0]),method
         if a['office_id']==b['office_id']: raise ValueError('Departure and destination are the same office. Review this journey.')
         if method=='haversine':
@@ -79,15 +101,18 @@ class Distance:
             if not base or version=='unconfigured': raise ValueError('Road distances are unavailable. Ask the administrator to configure the approved routing service.')
             coords=f"{a['longitude']},{a['latitude']};{b['longitude']},{b['latitude']}"
             try:
-                async with httpx.AsyncClient(timeout=12) as client:
-                    r=await client.get(base.rstrip('/')+'/route/v1/driving/'+coords,params={'overview':'false'}); r.raise_for_status(); data=r.json()
+                delay=max(0,1.05-(system_time.monotonic()-self._last_request))
+                if delay:await asyncio.sleep(delay)
+                self._last_request=system_time.monotonic()
+                async with httpx.AsyncClient(timeout=20,headers={'User-Agent':'IndiaPost-Smart-TA/1.0 (+https://india-post-smart-ta-preview.onrender.com)'}) as client:
+                    r=await client.get(base.rstrip('/')+'/route/v1/driving/'+coords,params={'overview':'false','radiuses':'1000;1000'}); r.raise_for_status(); data=r.json()
                 if data.get('code')!='Ok' or not data.get('routes'): raise ValueError('No road route found between these offices.')
                 v=float(data['routes'][0]['distance'])/1000
                 if not math.isfinite(v) or v<=0: raise ValueError('Routing service returned an invalid distance.')
             except (httpx.HTTPError,KeyError,TypeError): raise ValueError('Road routing is unavailable. Please retry; no distance has been estimated.')
         else: raise ValueError('The administrator must select a supported distance method.')
         result=money(v)
-        with sqlite3.connect(self.path) as c: c.execute('INSERT OR REPLACE INTO distances VALUES (?,?)',(key,str(result)))
+        with sqlite3.connect(self.path) as c: c.execute('INSERT OR REPLACE INTO distances_v2 VALUES (?,?,?)',(key,str(result),system_time.time()))
         return result,method
 
 def clock(value):

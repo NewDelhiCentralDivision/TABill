@@ -87,3 +87,40 @@ async def test_cached_straight_line_still_requires_approval(monkeypatch,tmp_path
 @pytest.mark.asyncio
 async def test_early_spoken_arrival():
     r=await run([leg(to_time='09:00')]);assert r['valid'];assert r['legs'][0]['from_time']=='08:30'
+
+@pytest.mark.asyncio
+async def test_road_cache_tracks_provider_map_version_and_expires(monkeypatch,tmp_path):
+    monkeypatch.setenv('DISTANCE_CACHE',str(tmp_path/'roads.db'))
+    monkeypatch.setenv('DISTANCE_METHOD','road')
+    monkeypatch.setenv('ROUTING_URL','https://routing.invalid')
+    monkeypatch.setenv('ROUTING_VERSION_URL','https://routing.invalid/map-version')
+    monkeypatch.setenv('ROUTING_DATA_VERSION','initial')
+    current=['2026-11-04T06:00:00Z'];route_calls=[]
+    async def get(self,url,**kwargs):
+        request=httpx.Request('GET',url)
+        if url.endswith('/map-version'):return httpx.Response(200,text=current[0],request=request)
+        route_calls.append(kwargs)
+        return httpx.Response(200,json={'code':'Ok','routes':[{'distance':6965.4}]},request=request)
+    monkeypatch.setattr(httpx.AsyncClient,'get',get)
+    d=Distance()
+    assert (await d.km(A,B))[0]==Decimal('6.97')
+    await d.km(A,B);assert len(route_calls)==1
+    current[0]='2026-11-05T06:00:00Z';d._version_checked=0
+    await d.km(A,B);assert len(route_calls)==2
+    with sqlite3.connect(d.path) as conn:conn.execute('UPDATE distances_v2 SET fetched_at=0')
+    await d.km(A,B);assert len(route_calls)==3
+    assert all(call['params']['radiuses']=='1000;1000' for call in route_calls)
+
+@pytest.mark.asyncio
+async def test_road_provider_failure_does_not_generate_fare(monkeypatch,tmp_path):
+    monkeypatch.setenv('DISTANCE_CACHE',str(tmp_path/'roads.db'))
+    monkeypatch.setenv('DISTANCE_METHOD','road')
+    monkeypatch.setenv('ROUTING_URL','https://routing.invalid')
+    monkeypatch.setenv('ROUTING_DATA_VERSION','v1')
+    monkeypatch.delenv('ROUTING_VERSION_URL',raising=False)
+    async def get(self,url,**kwargs):return httpx.Response(429,request=httpx.Request('GET',url))
+    monkeypatch.setattr(httpx.AsyncClient,'get',get)
+    result=await review(Claim(legs=[leg()]),Distance())
+    assert not result['valid']
+    assert 'distance' not in result['legs'][0]
+    with pytest.raises(ValueError):workbook(result)
