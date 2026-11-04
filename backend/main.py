@@ -92,7 +92,7 @@ async def transcribe_live(audio, mime, key):
     try:
         async with asyncio.timeout(120):
             async with client.aio.live.connect(model=os.getenv('TRANSCRIPTION_MODEL','gemini-3.5-transcribe-live'), config=config) as live:
-                async for part in (pcm[i:i + 32000] for i in range(0, len(pcm), 32000)):
+                for part in (pcm[i:i + 32000] for i in range(0, len(pcm), 32000)):
                     await live.send_realtime_input(audio=types.Blob(data=part, mime_type='audio/pcm;rate=16000'))
                 await live.send_realtime_input(audio_stream_end=True)
                 chunks=[]
