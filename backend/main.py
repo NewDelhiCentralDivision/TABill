@@ -14,6 +14,20 @@ from .core import ROOT,OFFICES,Extraction,Claim,review,workbook,Distance,normali
 app=FastAPI(title='India Post Smart TA Bill Generator',docs_url=None,redoc_url=None)
 sessions={}; attempts=defaultdict(deque); gate=asyncio.Semaphore(3); distances=Distance()
 MAX_BYTES=8*1024*1024
+# Gemini's Schema field accepts a subset of JSON Schema. Keep application-only
+# constraints in Pydantic validation rather than sending unsupported keywords.
+EXTRACTION_SCHEMA={
+    'type':'OBJECT','properties':{
+        'transcript':{'type':'STRING'},
+        'legs':{'type':'ARRAY','items':{
+            'type':'OBJECT','properties':{
+                **{name:{'type':'STRING'} for name in ('from_name','to_name','evidence','remarks')},
+                **{name:{'type':'STRING','nullable':True} for name in ('from_date','to_date','from_time','to_time','from_id','to_id')},
+                'date_evidence':{'type':'STRING','enum':['explicit','unambiguous_relative','missing']},
+            },'required':['from_name','to_name','date_evidence']
+        }}
+    },'required':['transcript','legs']
+}
 @app.middleware('http')
 async def protect(request,call_next):
     if request.method=='POST':
@@ -154,7 +168,7 @@ async def extract(audio, mime, prior):
         response=await client.aio.models.generate_content(
             model=os.getenv('EXTRACTION_MODEL','gemini-3.5-flash-lite'),
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0,response_mime_type='application/json',response_json_schema=Extraction.model_json_schema()),
+            config=types.GenerateContentConfig(temperature=0,response_mime_type='application/json',response_schema=EXTRACTION_SCHEMA),
         )
         parsed=Extraction.model_validate_json(response.text)
         for leg in parsed.legs:

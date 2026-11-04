@@ -82,7 +82,7 @@ async def test_gemini_schema_and_mime(monkeypatch):
     assert r.legs[0].from_id is None
     assert 'इंद्रप्रस्थ से संसद मार्ग' in seen[0]['contents']
     assert seen[0]['config'].response_mime_type=='application/json'
-    assert seen[0]['config'].response_json_schema==main.Extraction.model_json_schema()
+    assert seen[0]['config'].response_schema==main.EXTRACTION_SCHEMA
 @pytest.mark.asyncio
 async def test_invalid_json(monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY','test')
