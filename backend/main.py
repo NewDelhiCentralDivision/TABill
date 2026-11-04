@@ -1,5 +1,5 @@
 """Single-process, bounded, short-lived private sessions; no audio retained on disk."""
-import asyncio, base64, hashlib, json, os, secrets, subprocess, tempfile, time
+import asyncio, base64, hashlib, json, logging, os, re, secrets, subprocess, tempfile, time
 from collections import defaultdict, deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -110,6 +110,8 @@ async def transcribe_live(audio, mime, key):
         raise HTTPException(504, 'Transcription took too long. Your recording is preserved; please retry.')
     except Exception as exc:
         # Do not expose credentials, provider response bodies or audio in user-visible errors.
+        diagnostic=re.sub(r'AIza[0-9A-Za-z_-]+', '[redacted]', str(exc).replace(key,'[redacted]'))
+        logging.error('Gemini Live failure type=%s detail=%s', type(exc).__name__, diagnostic[:1500])
         status=getattr(exc, 'status_code', None)
         if status == 429 or '429' in str(exc):
             raise HTTPException(429, 'Gemini transcription quota is busy. Please wait and retry this recording.')
