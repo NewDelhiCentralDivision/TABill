@@ -154,7 +154,7 @@ async def extract(audio, mime, prior):
         response=await client.aio.models.generate_content(
             model=os.getenv('EXTRACTION_MODEL','gemini-3.5-flash-lite'),
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0,response_mime_type='application/json',response_schema=Extraction),
+            config=types.GenerateContentConfig(temperature=0,response_mime_type='application/json',response_json_schema=Extraction.model_json_schema()),
         )
         parsed=Extraction.model_validate_json(response.text)
         for leg in parsed.legs:
