@@ -43,7 +43,8 @@ docker run --rm -p 8000:10000 --env-file .env smart-ta
 | Variable | Meaning |
 | --- | --- |
 | `GEMINI_API_KEY` | Backend secret from Google AI Studio; never enter it in the app or commit it |
-| `GEMINI_MODEL` | Default `gemini-3.5-flash-lite`; verify availability with your account |
+| `TRANSCRIPTION_MODEL` | Speech model: `gemini-3.5-transcribe-live` through Gemini Live API, not generateContent |
+| `EXTRACTION_MODEL` | Structured journey extraction from transcript, default `gemini-3.5-flash-lite` |
 | `APP_ORIGIN` | Exact public HTTPS origin; no trailing slash |
 | `COOKIE_SECURE` | `true` for HTTPS; `false` only for localhost |
 | `DISTANCE_METHOD` | `road` by default, or explicitly approved `haversine` |
@@ -56,7 +57,7 @@ docker run --rm -p 8000:10000 --env-file .env smart-ta
 
 Road routing fails closed if unconfigured or unavailable. No multiplier, AI guess or automatic straight-line fallback is used. A private/provider OSRM endpoint is the implemented adapter; services with other authentication or request formats need a small server-side adapter. A verified distance cache is used only for responses from the configured provider, not an assertion of human survey verification.
 
-Model checked against [Google's model documentation](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite) on 4 November 2026: audio input and structured output are supported. `gemini-3.6-flash-lite` was not established as a documented model; `gemini-3.5-flash-lite` is used instead. [Listed Gemini API pricing](https://aistudio.google.com/docs/pricing#gemini-3.5-flash-lite): US$0.30 per million input tokens (including audio) and US$2.50 per million output tokens. Cost varies with audio length/output and account tier. No grounding, search or billable routing is enabled automatically. Use the paid API tier if departmental data handling requires Google's documented paid-tier data terms.
+Gemini speech transcription uses the documented Live API model `gemini-3.5-transcribe-live` with auto language identification; browser audio is decoded to 16 kHz mono PCM before streaming. Gemini Flash-Lite extracts journey fields from the transcript using a strict schema. See [Live transcription documentation](https://ai.google.dev/gemini-api/docs/live-api/live-transcribe) and [model list](https://ai.google.dev/gemini-api/docs/models). [Listed Gemini API pricing](https://aistudio.google.com/docs/pricing#gemini-3.5-flash-lite): US$0.30 per million input tokens (including audio) and US$2.50 per million output tokens. Cost varies with audio length/output and account tier. No grounding, search or billable routing is enabled automatically. Use the paid API tier if departmental data handling requires Google's documented paid-tier data terms.
 
 ## Deploy a separate Render preview
 
@@ -64,7 +65,7 @@ Use the connected GitHub repository `NewDelhiCentralDivision/TABill`, developmen
 
 The smallest Render plan (`free`, 512 MB) is suitable for preview and sleeps when idle. For an always-on departmental service, choose the 512 MB paid plan (listed at US$7/month on 4 November 2026) after measuring actual load. See [current plans](https://render.com/docs/compute-plans) and [prices](https://render.com/pricing). A single service avoids a second backend bill and cross-origin cookie complications. Cloudflare can front a custom domain later; the frontend remains static and can be moved to Cloudflare with a same-origin API proxy. Do not expose secrets through static build variables.
 
-Add `GEMINI_API_KEY`, the exact `APP_ORIGIN`, `GEMINI_MODEL`, `COOKIE_SECURE=true`, and the approved routing variables through Render's Environment screen. API secrets are intentionally not present in GitHub. Saving environment changes must result in a new deployment before they take effect. The preview can serve the interface without a key, but voice processing and road-distance export stay blocked until configured.
+Add `GEMINI_API_KEY`, the exact `APP_ORIGIN`, `GEMINI_MODEL=gemini-3.5-transcribe-live`, `EXTRACTION_MODEL=gemini-3.5-flash-lite`, `COOKIE_SECURE=true`, and the approved routing variables through Render's Environment screen. API secrets are intentionally not present in GitHub. Saving environment changes must result in a new deployment before they take effect. The preview can serve the interface without a key, but voice processing and road-distance export stay blocked until configured.
 
 ## Workflow, limits and recovery
 

@@ -1,5 +1,7 @@
 import asyncio, json
+from contextlib import asynccontextmanager
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import Mock
 import httpx, pytest
 from fastapi.testclient import TestClient
@@ -61,24 +63,36 @@ def test_webm_without_duration(monkeypatch):
 @pytest.mark.parametrize('status,expected',[(429,429),(500,503)])
 async def test_gemini_failure(monkeypatch,status,expected):
     monkeypatch.setenv('GEMINI_API_KEY','test-not-a-key')
-    async def post(*a,**kw):return httpx.Response(status)
-    monkeypatch.setattr(httpx.AsyncClient,'post',post)
+    async def transcript(*args):
+        if status==429: raise main.HTTPException(429,'quota')
+        raise main.HTTPException(503,'unavailable')
+    monkeypatch.setattr(main,'transcribe_live',transcript)
     with pytest.raises(main.HTTPException) as e: await main.extract(b'x','audio/webm',[])
     assert e.value.status_code==expected
 @pytest.mark.asyncio
 async def test_gemini_schema_and_mime(monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY','test');seen=[]
-    async def post(self,url,**kw):
-        seen.append(kw['json']);return httpx.Response(200,json={'candidates':[{'content':{'parts':[{'text':Extraction(transcript='यात्रा',legs=[leg()]).model_dump_json()}]}}]})
-    monkeypatch.setattr(httpx.AsyncClient,'post',post);r=await main.extract(b'x','audio/mp4',[])
-    assert r.legs[0].from_id is None;assert seen[0]['contents'][0]['parts'][1]['inline_data']['mime_type']=='audio/mp4';assert 'responseJsonSchema' in seen[0]['generationConfig']
+    monkeypatch.setattr(main,'transcribe_live',lambda *args: asyncio.sleep(0,result='इंद्रप्रस्थ से संसद मार्ग'))
+    async def generate_content(**kw):
+        seen.append(kw);return SimpleNamespace(text=Extraction(transcript='यात्रा',legs=[leg()]).model_dump_json())
+    async def aclose(): pass
+    sdk=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content),aclose=aclose))
+    monkeypatch.setattr(main.genai,'Client',lambda **kw:sdk)
+    r=await main.extract(b'x','audio/mp4',[])
+    assert r.legs[0].from_id is None
+    assert 'इंद्रप्रस्थ से संसद मार्ग' in seen[0]['contents']
+    assert seen[0]['config'].response_mime_type=='application/json'
+    assert seen[0]['config'].response_schema is main.Extraction
 @pytest.mark.asyncio
 async def test_invalid_json(monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY','test')
-    async def post(*a,**kw):return httpx.Response(200,json={'candidates':[{'content':{'parts':[{'text':'invalid'}]}}]})
-    monkeypatch.setattr(httpx.AsyncClient,'post',post)
+    monkeypatch.setattr(main,'transcribe_live',lambda *args: asyncio.sleep(0,result='spoken trip'))
+    async def generate_content(**kw):return SimpleNamespace(text='invalid')
+    async def aclose(): pass
+    sdk=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content),aclose=aclose))
+    monkeypatch.setattr(main.genai,'Client',lambda **kw:sdk)
     with pytest.raises(main.HTTPException) as e:await main.extract(b'x','audio/webm',[])
-    assert e.value.status_code==502
+    assert e.value.status_code==503
 @pytest.mark.asyncio
 async def test_ten_independent_officials(monkeypatch,audio_mock):
     monkeypatch.setenv('COOKIE_SECURE','false');main.sessions.clear();main.attempts.clear();monkeypatch.setattr(main,'distances',Fixed())
@@ -90,6 +104,9 @@ async def test_ten_independent_officials(monkeypatch,audio_mock):
 @pytest.mark.asyncio
 async def test_followup_preserves_chosen_office_ids(monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY','test');prior=[leg().model_dump(mode='json')]
-    async def post(*a,**kw):return httpx.Response(200,json={'candidates':[{'content':{'parts':[{'text':Extraction(transcript='date correction',legs=[leg(day='2026-11-04')]).model_dump_json()}]}}]})
-    monkeypatch.setattr(httpx.AsyncClient,'post',post);r=await main.extract(b'x','audio/mp4',prior)
+    monkeypatch.setattr(main,'transcribe_live',lambda *args: asyncio.sleep(0,result='date correction'))
+    async def generate_content(**kw):return SimpleNamespace(text=Extraction(transcript='date correction',legs=[leg(day='2026-11-04')]).model_dump_json())
+    async def aclose(): pass
+    sdk=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content),aclose=aclose))
+    monkeypatch.setattr(main.genai,'Client',lambda **kw:sdk);r=await main.extract(b'x','audio/mp4',prior)
     assert r.legs[0].from_id==prior[0]['from_id'];assert r.legs[0].to_id==prior[0]['to_id']
