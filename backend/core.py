@@ -13,6 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 HEADERS=['From Date','From Time','From Place','To Date','To Time','To Place','Mode','Distance (Km)','Fare Paid','Remarks']
 OFFICES=json.loads((ROOT/'data/offices.json').read_text())
 BY_ID={o['office_id']:o for o in OFFICES}
+DIVISIONS=sorted({o['division_name'] for o in OFFICES})
 ALIASES=json.loads((ROOT/'data/aliases.json').read_text())
 if any(key not in BY_ID for key in ALIASES): raise ValueError('Alias references an unknown office ID')
 class Leg(BaseModel):
@@ -32,8 +33,22 @@ class Extraction(BaseModel):
     transcript: str=Field(max_length=20000)
     legs: list[Leg]=Field(max_length=100)
 class Claim(BaseModel):
+    model_config=ConfigDict(extra='forbid')
     legs: list[Leg]=Field(min_length=1,max_length=100)
     rate: Decimal=Field(default=Decimal('11'),gt=0,le=10000,max_digits=8,decimal_places=2)
+    division: str=Field(default='',max_length=200)
+    employee_name: str=Field(default='',max_length=150)
+    designation: str=Field(default='',max_length=150)
+    headquarters: str=Field(default='',max_length=200)
+    basic_pay: Decimal|None=Field(default=None,ge=0,le=10000000,decimal_places=2)
+    pay_level: str=Field(default='',max_length=30)
+    purpose: str=Field(default='',max_length=500)
+    conveyance: str=Field(default='',max_length=150)
+    hotel: Decimal|None=Field(default=None,ge=0,le=10000000,decimal_places=2)
+    daily_allowance: Decimal|None=Field(default=None,ge=0,le=10000000,decimal_places=2)
+    personal_effects: Decimal|None=Field(default=None,ge=0,le=10000000,decimal_places=2)
+    deductions: Decimal|None=Field(default=None,ge=0,le=10000000,decimal_places=2)
+    advance: Decimal|None=Field(default=None,ge=0,le=10000000,decimal_places=2)
 def money(v): return Decimal(str(v)).quantize(Decimal('.01'),rounding=ROUND_HALF_UP)
 def normalize(s):
     s=unidecode(s).lower()
@@ -149,7 +164,11 @@ async def review(claim,distances):
                 row.update(distance=str(km),fare=str(fare),method=method);kms+=km;total+=fare
             except ValueError as e: fail(str(e))
         errors.extend(row['errors']); rows.append(row)
-    return {'legs':rows,'errors':list(dict.fromkeys(errors)),'total_distance':str(kms),'total_fare':str(total),'rate':str(claim.rate),'valid':not errors}
+    gross=total+sum((getattr(claim,k) or Decimal(0) for k in ('hotel','daily_allowance','personal_effects')),Decimal(0))
+    deductions=claim.deductions or Decimal(0);advance=claim.advance or Decimal(0)
+    return {'legs':rows,'errors':list(dict.fromkeys(errors)),'total_distance':str(kms),'total_fare':str(total),'rate':str(claim.rate),'valid':not errors,
+            'claim':claim.model_dump(mode='json',exclude={'legs','rate'}),
+            'summary':{'mileage':str(total),'gross':str(gross),'deductions':str(deductions),'advance':str(advance),'net':str(gross-deductions-advance)}}
 
 def workbook(result):
     if not result['valid']: raise ValueError('Please resolve the highlighted details before downloading.')
@@ -161,4 +180,8 @@ def workbook(result):
         for j,value in enumerate(values,1):
             c=s.cell(i,j,value);c._style=copy(styles[j-1])
             if isinstance(value,str): c.data_type='s' # prevent spoken spreadsheet formulas
+    # Keep JourneyDetails unchanged; employee and settlement information has its own sheet.
+    if result.get('claim',{}).get('division'):
+        from .proforma import add_summary
+        add_summary(w,result)
     out=io.BytesIO();w.save(out);out.seek(0);return out

@@ -1,5 +1,5 @@
 """Single-process, bounded, short-lived private sessions; no audio retained on disk."""
-import asyncio, base64, hashlib, json, logging, os, re, secrets, subprocess, tempfile, time
+import asyncio, base64, hashlib, io, json, logging, os, re, secrets, subprocess, tempfile, time, zipfile
 from collections import defaultdict, deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,7 +10,8 @@ from fastapi import FastAPI, Request, Response, UploadFile, File, Form, HTTPExce
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from .core import ROOT,OFFICES,Extraction,Claim,review,workbook,Distance,normalize,BY_ID
+from .core import ROOT,OFFICES,DIVISIONS,Extraction,Claim,review,workbook,Distance,normalize,BY_ID
+from .proforma import claim_errors,official_workbook,reconcile
 app=FastAPI(title='India Post Smart TA Bill Generator',docs_url=None,redoc_url=None)
 sessions={}; attempts=defaultdict(deque); gate=asyncio.Semaphore(3); distances=Distance()
 MAX_BYTES=8*1024*1024
@@ -56,7 +57,7 @@ async def config(request:Request,response:Response):
         if len(sessions)>=200: raise HTTPException(503,'The tool is busy. Please try shortly.')
         token=secrets.token_urlsafe(32);sessions[token]={'expires':now+1800,'lock':asyncio.Lock(),'results':{},'legs':[]}
     response.set_cookie('ta_session',token,httponly=True,samesite='strict',secure=os.getenv('COOKIE_SECURE','true')=='true',max_age=1800)
-    return {'offices':OFFICES,'distance_method':os.getenv('DISTANCE_METHOD','road'),'distance_ready':bool(os.getenv('ROUTING_URL') and os.getenv('ROUTING_DATA_VERSION') and os.getenv('ROUTING_DATA_VERSION')!='unconfigured'),'audio_ready':bool(os.getenv('GEMINI_API_KEY'))}
+    return {'offices':OFFICES,'divisions':DIVISIONS,'distance_method':os.getenv('DISTANCE_METHOD','road'),'distance_ready':bool(os.getenv('ROUTING_URL') and os.getenv('ROUTING_DATA_VERSION') and os.getenv('ROUTING_DATA_VERSION')!='unconfigured'),'audio_ready':bool(os.getenv('GEMINI_API_KEY'))}
 @app.get('/api/health')
 async def health(): return {'status':'ok','office_count':len(OFFICES)}
 
@@ -226,6 +227,7 @@ async def check(request:Request,claim:Claim):
     state=session(request)
     if not state['legs']: raise HTTPException(409,'Please record a journey first.')
     result=await review(claim,distances)
+    result['errors']+=claim_errors(claim);result['valid']=not result['errors']
     state['legs']=[l.model_dump(mode='json') for l in claim.legs]
     for original,resolved in zip(state['legs'],result['legs']):
         for side in ('from','to'):
@@ -233,15 +235,41 @@ async def check(request:Request,claim:Claim):
                 original[side+'_id']=resolved[side+'_id'];original[side+'_name']=resolved[side+'_name']
     return result
 @app.post('/api/export')
-async def export(request:Request,claim:Claim):
+async def export(request:Request,claim:Claim,format:str='existing'):
     state=session(request)
     if not state['legs']: raise HTTPException(409,'Please record a journey first.')
     result=await review(claim,distances)
-    if not result['valid']: raise HTTPException(422,'Please resolve the highlighted details before downloading.')
+    errors=claim_errors(claim)+result['errors']
+    if errors: raise HTTPException(422,' '.join(errors))
+    if format not in ('existing','official','both'):raise HTTPException(422,'Choose existing, official or both.')
     dates=sorted({r['from_date'] for r in result['legs']}|{r['to_date'] for r in result['legs']})
     label=dates[0] if len(dates)==1 else dates[0]+'_to_'+dates[-1]
     label='_to_'.join(datetime.fromisoformat(x).strftime('%d-%m-%Y') for x in label.split('_to_'))
-    try: output=await asyncio.to_thread(workbook,result)
-    except Exception: raise HTTPException(500,'The spreadsheet could not be created. Your journeys are preserved; please retry.')
-    return StreamingResponse(output,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':f'attachment; filename="TA_Bill_{label}.xlsx"'})
+    def build():
+        existing=workbook(result);official=official_workbook(result)
+        reconcile(existing,official,result)
+        return existing,official
+    try: existing,official=await asyncio.to_thread(build)
+    except ValueError as exc: raise HTTPException(422,str(exc))
+    except Exception:
+        logging.exception('TA export failed')
+        raise HTTPException(500,'The spreadsheet could not be created. Your journeys are preserved; please retry.')
+    from unidecode import unidecode
+    def slug(value):return re.sub(r'[^A-Za-z0-9_-]+','_',unidecode(value)).strip('_')[:80] or 'Claim'
+    stem=f'{slug(claim.employee_name)}_{slug(claim.division)}_{label}'
+    filenames=[f'Smart_TA_{stem}.xlsx',f'Official_TA_{stem}.xlsx']
+    if format=='both':
+        output=io.BytesIO()
+        with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
+            for name,stream in zip(filenames,(existing,official)):archive.writestr(name,stream.getvalue())
+        output.seek(0);filename=f'TA_Bills_{stem}.zip';mime='application/zip'
+    else:
+        index=0 if format=='existing' else 1;output=(existing,official)[index];filename=filenames[index]
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    return StreamingResponse(output,media_type=mime,headers={'Content-Disposition':f'attachment; filename="{filename}"'})
+@app.post('/api/generate')
+async def generate(request:Request,claim:Claim):
+    # Exercise the identical serializer and reconciliation gate used by downloads.
+    await export(request,claim,'both')
+    return {'ready':True,'formats':['existing','official','both']}
 app.mount('/',StaticFiles(directory=ROOT/'web',html=True),name='web')

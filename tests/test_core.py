@@ -105,7 +105,7 @@ async def test_road_cache_tracks_provider_map_version_and_expires(monkeypatch,tm
     d=Distance()
     assert (await d.km(A,B))[0]==Decimal('6.97')
     await d.km(A,B);assert len(route_calls)==1
-    current[0]='2026-11-05T06:00:00Z';d._version_checked=0
+    current[0]='2026-11-05T06:00:00Z';d._version_checked=system_time.monotonic()-3601
     await d.km(A,B);assert len(route_calls)==2
     with sqlite3.connect(d.path) as conn:conn.execute('UPDATE distances_v2 SET fetched_at=0')
     await d.km(A,B);assert len(route_calls)==3

@@ -104,3 +104,8 @@ Do not merge until these acceptance checks and administrator configuration are c
 The preview uses FOSSGIS OSRM car routes from OpenStreetMap at `https://routing.openstreetmap.de/routed-car`. Only matched public office coordinates are sent; audio and employee details are not sent to this provider. Its published Asia/car map timestamp is read from `https://map.project-osrm.org/timestamps/careuasi.data_timestamp` (`ROUTING_VERSION_URL`) and included in each directional cache key. Distances expire after 24 hours. Network calls are serialized to at most one per second across the single worker. Office endpoints must snap within one kilometre of a road. Attribution and a Fix the map link appear in the footer.
 
 This public community service is suitable for light preview usage, has no availability guarantee, and must not be used for bulk requests. A contracted or self-hosted OSRM service should replace the origin for larger departmental rollout. A provider outage blocks the affected distance instead of substituting an aerial distance. Routing results are road-network distances from the supplied office coordinates; they are not certified departmental mileage. See the [provider policy](https://routing.openstreetmap.de/about.html).
+
+
+## Dual TA outputs and Postal Division
+
+See [DUAL_OUTPUT.md](DUAL_OUTPUT.md) for employee input validation, the existing-master division selector, official Excel mappings, synchronized exports, tests and limitations.

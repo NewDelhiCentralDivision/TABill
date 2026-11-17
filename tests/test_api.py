@@ -20,24 +20,27 @@ def audio_mock(monkeypatch):
     async def extract(audio,mime,prior):
         calls.append(prior);return Extraction(transcript='3 November 2026, Indraprastha to Sansad Marg',legs=[leg()])
     monkeypatch.setattr(main,'extract',extract);return calls
+def approved_claim(**kw):
+    return Claim(employee_name='Test Official',designation='Postal Assistant',headquarters='Delhi',division='New Delhi Central Division',**kw)
+
 def submit(c,content=b'audio',followup='false'):
     return c.post('/api/audio',files={'audio':('journey.webm',content,'audio/webm;codecs=opus')},data={'followup':followup})
 def test_no_submission_no_export(client):
-    assert client.post('/api/export',json=Claim(legs=[leg()]).model_dump(mode='json')).status_code==409
+    assert client.post('/api/export',json=approved_claim(legs=[leg()]).model_dump(mode='json')).status_code==409
 
 def test_retry_idempotence_followup_and_export(client,audio_mock):
     assert submit(client).status_code==200;assert submit(client).status_code==200;assert len(audio_mock)==1
-    claim=Claim(legs=[leg()]);r=client.post('/api/review',json=claim.model_dump(mode='json'));assert r.json()['valid']
+    claim=approved_claim(legs=[leg()]);r=client.post('/api/review',json=claim.model_dump(mode='json'));assert r.json()['valid']
     assert submit(client,b'followup','true').status_code==200;assert audio_mock[-1][0]['from_date']=='2026-11-03'
     out=client.post('/api/export',json=claim.model_dump(mode='json'));assert out.status_code==200;assert out.content.startswith(b'PK');assert '03-11-2026' in out.headers['content-disposition']
 
 def test_session_isolation(client,audio_mock):
     submit(client)
     with TestClient(main.app) as other:
-        other.get('/api/config');r=other.post('/api/export',json=Claim(legs=[leg()]).model_dump(mode='json'));assert r.status_code==409
+        other.get('/api/config');r=other.post('/api/export',json=approved_claim(legs=[leg()]).model_dump(mode='json'));assert r.status_code==409
 
 def test_missing_date_blocked(client,audio_mock):
-    submit(client);r=client.post('/api/export',json=Claim(legs=[leg(day=None)]).model_dump(mode='json'));assert r.status_code==422
+    submit(client);r=client.post('/api/export',json=approved_claim(legs=[leg(day=None)]).model_dump(mode='json'));assert r.status_code==422
 
 def test_wrong_origin(client):
     assert client.post('/api/audio',headers={'Origin':'https://evil.invalid'}).status_code==403
@@ -99,7 +102,7 @@ async def test_ten_independent_officials(monkeypatch,audio_mock):
     async def official(n):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app),base_url='http://testserver') as c:
             await c.get('/api/config');r=await c.post('/api/audio',files={'audio':('recording.webm',str(n).encode(),'audio/webm')});assert r.status_code==200
-            r=await c.post('/api/review',json=Claim(legs=[leg()],rate=str(11+n)).model_dump(mode='json'));assert r.json()['valid'];return c.cookies.get('ta_session'),r.json()['total_fare']
+            r=await c.post('/api/review',json=approved_claim(legs=[leg()],rate=str(11+n)).model_dump(mode='json'));assert r.json()['valid'];return c.cookies.get('ta_session'),r.json()['total_fare']
     results=await asyncio.gather(*(official(n) for n in range(10)));assert len({x[0] for x in results})==10;assert len({x[1] for x in results})==10
 @pytest.mark.asyncio
 async def test_followup_preserves_chosen_office_ids(monkeypatch):
